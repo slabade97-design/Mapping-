@@ -1,28 +1,13 @@
-import sys
-import subprocess
-import threading
+import streamlit as st
+import tempfile
+import zipfile
 import time
 import re
-
-# Auto-install required packages into the active Python interpreter if missing
-for pkg_name, import_name in [
-    ("openpyxl", "openpyxl"),
-    ("numpy", "numpy"),
-    ("matplotlib", "matplotlib"),
-    ("python-docx", "docx"),
-    ("customtkinter", "customtkinter")
-]:
-    try:
-        __import__(import_name)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg_name])
-
-import customtkinter as ctk
-from tkinter import messagebox, filedialog
-import numpy as np
 import datetime
 import os
 import io
+
+import numpy as np
 
 # Excel imports
 from openpyxl import Workbook
@@ -44,13 +29,13 @@ from openpyxl.chart.text import RichText, Text
 from openpyxl.chart.title import Title
 from openpyxl.chart.shapes import GraphicalProperties
 
-# Matplotlib for rendering Excel-style trend charts into Word
+# Matplotlib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
 
-# Word (.docx) imports
+# Word imports
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
@@ -219,7 +204,6 @@ def style_line_chart(chart, title_text, y_title_text, is_rh=False, y_min=None, y
         else:
             sc = SchemeColor(val=acc, lumMod=80000, lumOff=20000)
         s.graphicalProperties.line = LineProperties(w=28575, cap="rnd", solidFill=ColorChoice(schemeClr=sc), round=True)
-
 
 def render_excel_chart_png(dates_and_times, series_list, ch_labels, title_text, y_label):
     excel_palette = ["#5B9BD5", "#ED7D31", "#A5A5A5", "#FFC000", "#4472C4", "#70AD47", "#255E91", "#9E480E", "#636363", "#997300", "#264478", "#43682B"]
@@ -396,9 +380,6 @@ def add_page_number_fields(para, font_size=10):
     add_txt(" of ", False)
     add_fld("NUMPAGES", True)
 
-# ==============================================================================
-# DOCX GENERATORS
-# ==============================================================================
 def generate_raw_data_docx(
     docx_path, client_name, client_address, target_type, target_name, equip_id,
     start_date, next_due, dl_count, start_ht_dl,
@@ -1319,246 +1300,76 @@ def generate_mapping_report_docx(
 
 
 # ==============================================================================
-# GUI CLASS (CUSTOMTKINTER)
+# STREAMLIT WEB GUI
 # ==============================================================================
-class MappingApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        self.title("Mapping Report Generator - Professional Edition")
-        self.geometry("750x670")
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
+st.set_page_config(page_title="Mapping Report Generator", layout="wide")
+st.title("📊 Mapping Report Generator")
+st.markdown("Generate comprehensive Equipment and Area temperature/RH mapping reports instantly.")
 
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+tab1, tab2, tab3 = st.tabs(["1. Target Details", "2. Mapping Parameters", "3. Calibration Details"])
 
-        # Tabview
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        
-        self.tab_target = self.tabview.add("1. Target Details")
-        self.tab_params = self.tabview.add("2. Mapping Parameters")
-        self.tab_calib = self.tabview.add("3. Calibration & Output")
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1:
+        client_name = st.text_input("Client Name:", "M/S LIFESTAR PHARMACEUTICALS PVT. LTD.")
+        target_type = st.selectbox("Mapping Target:", ["Equipment", "Area"])
+        equip_id = st.text_input("Equip ID No. (If Equip):", "QAD/A/001")
+        report_no = st.text_input("Report No.:", "HT/STC/2026/07/03")
+    with col2:
+        client_address = st.text_input("Client Address:", "BIRGUNJ-32, PARSA, NEPAL.")
+        target_name = st.text_input("Area / Equip Name:", "Stability Chamber")
+        location_name = st.text_input("Location / Dept:", "Stability Room")
+        validated_by = st.text_input("Validated By:", "Horizon Technology")
 
-        self.build_target_tab()
-        self.build_params_tab()
-        self.build_calib_tab()
-
-        # Bottom Frame (Progress & Action)
-        self.bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.bottom_frame.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="ew")
-        self.bottom_frame.grid_columnconfigure(0, weight=1)
-
-        self.status_label = ctk.CTkLabel(self.bottom_frame, text="Ready", font=("Segoe UI", 12))
-        self.status_label.grid(row=0, column=0, sticky="w")
-
-        self.progress = ctk.CTkProgressBar(self.bottom_frame, mode="determinate")
-        self.progress.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 15))
-        self.progress.set(0)
-
-        self.btn_generate = ctk.CTkButton(self.bottom_frame, text="Generate Reports", height=40, font=("Segoe UI", 14, "bold"), command=self.start_generation_thread)
-        self.btn_generate.grid(row=2, column=0, columnspan=2, sticky="ew")
-
-    def build_target_tab(self):
-        self.tab_target.grid_columnconfigure(1, weight=1)
-        
-        def create_row(parent, row, label_text, default_val, widget_type="entry", values=None):
-            ctk.CTkLabel(parent, text=label_text).grid(row=row, column=0, padx=10, pady=10, sticky="w")
-            if widget_type == "entry":
-                widget = ctk.CTkEntry(parent)
-                widget.insert(0, default_val)
-            elif widget_type == "combo":
-                widget = ctk.CTkComboBox(parent, values=values)
-                widget.set(default_val)
-            widget.grid(row=row, column=1, padx=10, pady=10, sticky="ew")
-            return widget
-
-        self.entry_client = create_row(self.tab_target, 0, "Client Name:", "M/S LIFESTAR PHARMACEUTICALS PVT. LTD.")
-        self.entry_address = create_row(self.tab_target, 1, "Client Address:", "BIRGUNJ-32, PARSA, NEPAL.")
-        self.combo_target = create_row(self.tab_target, 2, "Mapping Target:", "Equipment", "combo", ["Area", "Equipment"])
-        self.entry_target_name = create_row(self.tab_target, 3, "Area / Equip Name:", "Stability Chamber")
-        self.entry_equip_id = create_row(self.tab_target, 4, "Equip ID No. (If Equip):", "QAD/A/001")
-        self.entry_location = create_row(self.tab_target, 5, "Location / Dept:", "Stability Room")
-        self.entry_rep_no = create_row(self.tab_target, 6, "Report No.:", "HT/STC/2026/07/03")
-        self.entry_val_by = create_row(self.tab_target, 7, "Validated By:", "Horizon Technology")
-
-    def toggle_rh_fields(self):
-        is_temp_only = self.checkbox_temp_only.get() == 1
-        state = "disabled" if is_temp_only else "normal"
-        self.entry_rmin.configure(state=state)
-        self.entry_rmax.configure(state=state)
-        self.entry_rcrit.configure(state=state)
-
-    def build_params_tab(self):
-        self.tab_params.grid_columnconfigure(1, weight=1)
-        
-        frame_dl = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_dl.grid(row=0, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_dl_count = ctk.CTkEntry(frame_dl, width=80); self.entry_dl_count.insert(0, "8"); self.entry_dl_count.pack(side="left", padx=(0, 10))
-        self.entry_htdl = ctk.CTkEntry(frame_dl, width=80); self.entry_htdl.insert(0, "67"); self.entry_htdl.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="Loggers Count / Start HT-DL:").grid(row=0, column=0, sticky="w", padx=10)
-
-        frame_dt = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_dt.grid(row=1, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_date = ctk.CTkEntry(frame_dt, width=100); self.entry_date.insert(0, "24/07/26"); self.entry_date.pack(side="left", padx=(0, 10))
-        self.entry_time = ctk.CTkEntry(frame_dt, width=100); self.entry_time.insert(0, "10:00:00"); self.entry_time.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="Start Date & Time:").grid(row=1, column=0, sticky="w", padx=10)
-
-        ctk.CTkLabel(self.tab_params, text="Next Due Date:").grid(row=2, column=0, sticky="w", padx=10)
-        self.entry_due_date = ctk.CTkEntry(self.tab_params); self.entry_due_date.insert(0, "28/07/27"); self.entry_due_date.grid(row=2, column=1, sticky="ew", padx=10, pady=10)
-
-        frame_dur = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_dur.grid(row=3, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_duration = ctk.CTkEntry(frame_dur, width=80); self.entry_duration.insert(0, "24"); self.entry_duration.pack(side="left", padx=(0, 10))
-        self.entry_freq = ctk.CTkEntry(frame_dur, width=80); self.entry_freq.insert(0, "10"); self.entry_freq.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="Duration (Hrs) / Freq (Mins):").grid(row=3, column=0, sticky="w", padx=10)
-
-        frame_t = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_t.grid(row=4, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_tmin = ctk.CTkEntry(frame_t, width=80); self.entry_tmin.insert(0, "29.2"); self.entry_tmin.pack(side="left", padx=(0, 10))
-        self.entry_tmax = ctk.CTkEntry(frame_t, width=80); self.entry_tmax.insert(0, "30.9"); self.entry_tmax.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="Temp Range (Min / Max):").grid(row=4, column=0, sticky="w", padx=10)
-
-        frame_r = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_r.grid(row=5, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_rmin = ctk.CTkEntry(frame_r, width=80); self.entry_rmin.insert(0, "73.9"); self.entry_rmin.pack(side="left", padx=(0, 10))
-        self.entry_rmax = ctk.CTkEntry(frame_r, width=80); self.entry_rmax.insert(0, "76.1"); self.entry_rmax.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="RH Range (Min / Max):").grid(row=5, column=0, sticky="w", padx=10)
-
-        frame_crit = ctk.CTkFrame(self.tab_params, fg_color="transparent")
-        frame_crit.grid(row=6, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_tcrit = ctk.CTkEntry(frame_crit, width=120); self.entry_tcrit.insert(0, "30°C ± 2 °C"); self.entry_tcrit.pack(side="left", padx=(0, 10))
-        self.entry_rcrit = ctk.CTkEntry(frame_crit, width=120); self.entry_rcrit.insert(0, "75 % ± 5 %"); self.entry_rcrit.pack(side="left")
-        ctk.CTkLabel(self.tab_params, text="Acceptance (Temp / RH):").grid(row=6, column=0, sticky="w", padx=10)
-        
-        self.entry_hotspot = ctk.CTkEntry(self.tab_params)
-        self.entry_hotspot.insert(0, "8")
-        self.entry_hotspot.grid(row=7, column=1, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(self.tab_params, text="Hotspot Logger (Optional):").grid(row=7, column=0, sticky="w", padx=10)
-
-        self.combo_pattern = ctk.CTkComboBox(self.tab_params, values=[
+with tab2:
+    col3, col4 = st.columns(2)
+    with col3:
+        dl_count = st.number_input("Loggers Count:", min_value=1, value=8)
+        start_date_str = st.text_input("Start Date (DD/MM/YY):", "24/07/26")
+        duration_hrs = st.number_input("Duration (Hrs):", min_value=1, value=24)
+        temp_min = st.number_input("Temp Range Min:", value=29.2, format="%.1f")
+        rh_min = st.number_input("RH Range Min:", value=73.9, format="%.1f")
+        temp_criteria = st.text_input("Temp Acceptance:", "30°C ± 2 °C")
+        data_pattern = st.selectbox("Wave Profile:", [
             "Standard Cycle (2 PM Peak)", 
             "Shifted Cycle (Random Peak)", 
             "High Noise Cycle", 
             "Low Amplitude Cycle"
         ])
-        self.combo_pattern.set("Standard Cycle (2 PM Peak)")
-        self.combo_pattern.grid(row=8, column=1, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(self.tab_params, text="Wave Profile:").grid(row=8, column=0, sticky="w", padx=10)
+    with col4:
+        start_ht_dl = st.number_input("Start HT-DL No.:", min_value=1, value=67)
+        start_time_str = st.text_input("Start Time (HH:MM:SS):", "10:00:00")
+        freq_mins = st.number_input("Freq (Mins):", min_value=1, value=10)
+        temp_max = st.number_input("Temp Range Max:", value=30.9, format="%.1f")
+        rh_max = st.number_input("RH Range Max:", value=76.1, format="%.1f")
+        rh_criteria = st.text_input("RH Acceptance:", "75 % ± 5 %")
+        hotspot_str = st.text_input("Hotspot Logger (Optional):", "8")
+        next_due_str = st.text_input("Next Due Date:", "28/07/27")
+    
+    st.write("---")
+    is_temp_only = st.checkbox("🌡️ Temperature Mapping Only (Exclude Relative Humidity)", value=False)
 
-        self.checkbox_temp_only = ctk.CTkCheckBox(
-            self.tab_params, 
-            text="Temperature Mapping Only (Exclude Relative Humidity)",
-            command=self.toggle_rh_fields
-        )
-        self.checkbox_temp_only.grid(row=9, column=1, sticky="w", padx=10, pady=10)
+with tab3:
+    col5, col6 = st.columns(2)
+    with col5:
+        dl_cal_date = st.text_input("Logger Cal Date:", "10/01/2026")
+        dl_cert_no = st.text_input("Logger Certificate No.:", "RK230125/N002 & RK230125/N003")
+        master_id = st.text_input("Master ID:", "RK-STD-103")
+        master_cal_date = st.text_input("Master Cal Date:", "14 November 2025")
+    with col6:
+        dl_due_date = st.text_input("Logger Due Date:", "09/01/2027")
+        st.write("") # spacing
+        st.write("") 
+        master_cert = st.text_input("Master Cert No.:", "SAN/25/1439/TH/1")
+        master_due_date = st.text_input("Master Due Date:", "13 November 2026")
 
-    def build_calib_tab(self):
-        self.tab_calib.grid_columnconfigure(1, weight=1)
+st.write("---")
 
-        frame_dldate = ctk.CTkFrame(self.tab_calib, fg_color="transparent")
-        frame_dldate.grid(row=0, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_dl_cal = ctk.CTkEntry(frame_dldate, width=120); self.entry_dl_cal.insert(0, "10/01/2026"); self.entry_dl_cal.pack(side="left", padx=(0, 10))
-        self.entry_dl_due = ctk.CTkEntry(frame_dldate, width=120); self.entry_dl_due.insert(0, "09/01/2027"); self.entry_dl_due.pack(side="left")
-        ctk.CTkLabel(self.tab_calib, text="Logger Cal / Due Date:").grid(row=0, column=0, sticky="w", padx=10)
-
-        self.entry_dl_cert = ctk.CTkEntry(self.tab_calib)
-        self.entry_dl_cert.insert(0, "RK230125/N002 & RK230125/N003")
-        self.entry_dl_cert.grid(row=1, column=1, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(self.tab_calib, text="Logger Certificate No.:").grid(row=1, column=0, sticky="w", padx=10)
-
-        frame_mst1 = ctk.CTkFrame(self.tab_calib, fg_color="transparent")
-        frame_mst1.grid(row=2, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_mst_id = ctk.CTkEntry(frame_mst1, width=100); self.entry_mst_id.insert(0, "RK-STD-103"); self.entry_mst_id.pack(side="left", padx=(0, 10))
-        self.entry_mst_cert = ctk.CTkEntry(frame_mst1, width=150); self.entry_mst_cert.insert(0, "SAN/25/1439/TH/1"); self.entry_mst_cert.pack(side="left")
-        ctk.CTkLabel(self.tab_calib, text="Master ID / Cert No.:").grid(row=2, column=0, sticky="w", padx=10)
-
-        frame_mst2 = ctk.CTkFrame(self.tab_calib, fg_color="transparent")
-        frame_mst2.grid(row=3, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_mst_cal = ctk.CTkEntry(frame_mst2, width=120); self.entry_mst_cal.insert(0, "14 November 2025"); self.entry_mst_cal.pack(side="left", padx=(0, 10))
-        self.entry_mst_due = ctk.CTkEntry(frame_mst2, width=120); self.entry_mst_due.insert(0, "13 November 2026"); self.entry_mst_due.pack(side="left")
-        ctk.CTkLabel(self.tab_calib, text="Master Cal / Due Date:").grid(row=3, column=0, sticky="w", padx=10)
-
-        frame_out = ctk.CTkFrame(self.tab_calib, fg_color="transparent")
-        frame_out.grid(row=4, column=1, sticky="ew", padx=10, pady=10)
-        self.entry_folder = ctk.CTkEntry(frame_out)
-        self.entry_folder.insert(0, r"D:\New folder")
-        self.entry_folder.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        btn_browse = ctk.CTkButton(frame_out, text="Browse", width=60, command=self.browse_folder)
-        btn_browse.pack(side="right")
-        ctk.CTkLabel(self.tab_calib, text="Output Folder:").grid(row=4, column=0, sticky="w", padx=10)
-
-    def browse_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.entry_folder.delete(0, "end")
-            self.entry_folder.insert(0, folder)
-
-    def set_progress(self, val, text):
-        self.progress.set(val)
-        self.status_label.configure(text=text)
-        self.update_idletasks()
-
-    def start_generation_thread(self):
-        self.btn_generate.configure(state="disabled")
-        self.set_progress(0, "Initializing data...")
-        threading.Thread(target=self.generate_report_logic, daemon=True).start()
-
-    def generate_report_logic(self):
+if st.button("🚀 Generate Reports", type="primary", use_container_width=True):
+    with st.spinner("Simulating data and rendering reports... This may take a minute."):
         try:
-            # 1. Fetch values
-            is_temp_only = self.checkbox_temp_only.get() == 1
-
-            client_name = self.entry_client.get()
-            client_address = self.entry_address.get()
-            target_type = self.combo_target.get()
-            target_name = self.entry_target_name.get()
-            equip_id = self.entry_equip_id.get()
-            location_name = self.entry_location.get()
-            report_no = self.entry_rep_no.get()
-            validated_by = self.entry_val_by.get()
-
-            dl_count = int(self.entry_dl_count.get())
-            start_ht_dl = int(self.entry_htdl.get())
-
-            start_date_str = self.entry_date.get().strip()
-            start_time_str = self.entry_time.get().strip()
-            next_due_str = self.entry_due_date.get().strip()
-
-            duration_hrs = int(self.entry_duration.get())
-            freq_mins = int(self.entry_freq.get())
-
-            temp_min = float(self.entry_tmin.get())
-            temp_max = float(self.entry_tmax.get())
-            
-            if not is_temp_only:
-                rh_min = float(self.entry_rmin.get())
-                rh_max = float(self.entry_rmax.get())
-                rh_criteria = self.entry_rcrit.get().strip()
-            else:
-                rh_min, rh_max, rh_criteria = 0.0, 0.0, "N/A"
-
-            temp_criteria = self.entry_tcrit.get().strip()
-
-            dl_cal_date = self.entry_dl_cal.get().strip()
-            dl_due_date = self.entry_dl_due.get().strip()
-            dl_cert_no = self.entry_dl_cert.get().strip()
-
-            master_id = self.entry_mst_id.get().strip()
-            master_cert = self.entry_mst_cert.get().strip()
-            master_cal_date = self.entry_mst_cal.get().strip()
-            master_due_date = self.entry_mst_due.get().strip()
-
-            hotspot_str = self.entry_hotspot.get().strip()
-            data_pattern = self.combo_pattern.get()
-            output_folder = self.entry_folder.get().strip()
-            
             safe_name = sanitize_filename(target_name)
-            os.makedirs(output_folder, exist_ok=True)
             
-            self.set_progress(0.1, "Simulating Mapping Data...")
-            time.sleep(0.2)
-
             parsed_start_d = parse_flexible_date(start_date_str)
             parsed_time = datetime.datetime.strptime(start_time_str, "%H:%M:%S").time()
             start_date = datetime.datetime.combine(parsed_start_d.date(), parsed_time)
@@ -1576,7 +1387,7 @@ class MappingApp(ctk.CTk):
             else:
                 hotspot_idx = np.random.randint(0, dl_count)
 
-            # Excel Workbook Setup
+            # --- EXCEL GENERATION ---
             wb = Workbook()
             ws = wb.active
             ws.title = "Mapping Data"
@@ -1664,7 +1475,6 @@ class MappingApp(ctk.CTk):
                 if not is_temp_only:
                     base_rhs.append((rh_min + (rh_span / 2)) + np.random.uniform(-rh_span * 0.15, rh_span * 0.15))
 
-            # Set wave parameters based on selection
             if data_pattern == "Shifted Cycle (Random Peak)":
                 peak_hour = np.random.uniform(0, 24)
                 amp_mult, noise_mult = 0.15, 0.05
@@ -1681,8 +1491,6 @@ class MappingApp(ctk.CTk):
             current_row = 9
             
             for i in range(num_readings):
-                if i % 100 == 0: self.set_progress(0.1 + (0.3 * (i/num_readings)), f"Writing row {i} of {num_readings}...")
-                
                 c_s = ws.cell(row=current_row, column=1, value=sr_nos[i])
                 c_s.font, c_s.alignment, c_s.border = font_reg, align_center, border_all
                 c_d = ws.cell(row=current_row, column=2, value=dates_and_times[i])
@@ -1718,7 +1526,6 @@ class MappingApp(ctk.CTk):
             last_data_row = current_row - 1
 
             # Excel Footer Calcs
-            self.set_progress(0.4, "Calculating MKT & Summaries...")
             ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=total_cols)
             for c_idx in range(1, total_cols + 1):
                 cell = ws.cell(row=current_row, column=c_idx)
@@ -1781,7 +1588,6 @@ class MappingApp(ctk.CTk):
                         c.font, c.alignment, c.border, c.number_format = font_reg, align_center, border_all, "0.0"
                     current_row += 1
 
-            self.set_progress(0.45, "Rendering Excel Charts...")
             chart_t = LineChart()
             dates_ref = Reference(ws, min_col=2, min_row=9, max_row=last_data_row)
             for d in range(dl_count):
@@ -1800,11 +1606,6 @@ class MappingApp(ctk.CTk):
                 ws.add_chart(chart_rh)
                 chart_rh.anchor = OneCellAnchor(_from=AnchorMarker(col=max(26, total_cols + 2) + 1, colOff=278423, row=max(0, last_data_row - 7) + 32, rowOff=102576), ext=XDRPositiveSize2D(cx=8005960, cy=3516924))
             
-            excel_filename = f"{safe_name}_Mapping_Data.xlsx"
-            wb.save(os.path.join(output_folder, excel_filename))
-            
-            # Matplotlib Charts for Word
-            self.set_progress(0.5, "Rendering Image Charts for Word...")
             if is_temp_only:
                 t_ch_labels = [f"CH {d+1:02d}" for d in range(dl_count)]
                 chart_rh_buf = None
@@ -1815,33 +1616,47 @@ class MappingApp(ctk.CTk):
 
             chart_t_buf = render_excel_chart_png(dates_and_times, all_temps, t_ch_labels, f"{target_name.strip()} - Temperature Trend", "Temperature (°C)")
 
-            # Word Doc 1
-            self.set_progress(0.65, "Building Raw Data Document...")
-            raw_docx_filename = f"{safe_name}_RAW_DATA.docx"
-            generate_raw_data_docx(
-                os.path.join(output_folder, raw_docx_filename), client_name, client_address, target_type, target_name, equip_id,
-                start_date, next_due, dl_count, start_ht_dl, sr_nos, dates_and_times, all_temps, all_rhs, mkt_vals, is_temp_only
-            )
-            
-            # Word Doc 2
-            self.set_progress(0.85, "Building Final Report Document...")
-            report_docx_filename = f"{safe_name}_REPORT.docx"
-            generate_mapping_report_docx(
-                os.path.join(output_folder, report_docx_filename), client_name, client_address, target_type, target_name, equip_id, location_name,
-                report_no, validated_by, start_date, end_date, next_due, duration_hrs, freq_mins, dl_count, start_ht_dl,
-                temp_criteria, rh_criteria, dl_cal_date, dl_due_date, dl_cert_no, master_id, master_cert, master_cal_date, master_due_date,
-                all_temps, all_rhs, mkt_vals, chart_t_buf, chart_rh_buf, is_temp_only
-            )
+            # Use a temporary directory for file compilation
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                excel_path = os.path.join(tmpdirname, f"{safe_name}_Mapping_Data.xlsx")
+                wb.save(excel_path)
+                
+                raw_docx_path = os.path.join(tmpdirname, f"{safe_name}_RAW_DATA.docx")
+                generate_raw_data_docx(
+                    raw_docx_path, client_name, client_address, target_type, target_name, equip_id,
+                    start_date, next_due, dl_count, start_ht_dl, sr_nos, dates_and_times, all_temps, all_rhs, mkt_vals, is_temp_only
+                )
+                
+                report_docx_path = os.path.join(tmpdirname, f"{safe_name}_REPORT.docx")
+                generate_mapping_report_docx(
+                    report_docx_path, client_name, client_address, target_type, target_name, equip_id, location_name,
+                    report_no, validated_by, start_date, end_date, next_due, duration_hrs, freq_mins, dl_count, start_ht_dl,
+                    temp_criteria, rh_criteria, dl_cal_date, dl_due_date, dl_cert_no, master_id, master_cert, master_cal_date, master_due_date,
+                    all_temps, all_rhs, mkt_vals, chart_t_buf, chart_rh_buf, is_temp_only
+                )
 
-            self.set_progress(1.0, "Complete!")
-            self.after(100, lambda: messagebox.showinfo("Success", f"All files successfully generated in:\n{output_folder}"))
-            
+                # Bundle into ZIP
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for filename in os.listdir(tmpdirname):
+                        file_path = os.path.join(tmpdirname, filename)
+                        zip_file.write(file_path, arcname=filename)
+                
+                # Store in session state to persist download button
+                st.session_state['zip_data'] = zip_buffer.getvalue()
+                st.session_state['zip_name'] = f"{safe_name}_Reports.zip"
+
+            st.success("✅ Reports generated successfully!")
+
         except Exception as e:
-            self.after(100, lambda: messagebox.showerror("Error", str(e)))
-            self.set_progress(0, "Failed.")
-        finally:
-            self.btn_generate.configure(state="normal")
+            st.error(f"❌ An error occurred: {str(e)}")
 
-if __name__ == "__main__":
-    app = MappingApp()
-    app.mainloop()
+# Display the download button if files are ready
+if 'zip_data' in st.session_state:
+    st.download_button(
+        label="⬇️ Download All Reports (ZIP)",
+        data=st.session_state['zip_data'],
+        file_name=st.session_state['zip_name'],
+        mime="application/zip",
+        type="primary"
+    )
